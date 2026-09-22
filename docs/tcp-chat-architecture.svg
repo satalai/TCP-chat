@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Go TCP 多人终端聊天室当前架构</title>
+  <desc id="desc">三个 Go 终端客户端通过 TCP 长连接到 :8080 服务端。服务端为每个连接启动 goroutine，由带读写锁的用户管理器向其他用户广播消息。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#f7fbff"/><stop offset="1" stop-color="#edf8f7"/></linearGradient>
+    <linearGradient id="server" x1="0" x2="1"><stop stop-color="#0b7285"/><stop offset="1" stop-color="#14b8a6"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#164e63" flood-opacity=".14"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#0891b2"/></marker>
+    <style>
+      text{font-family:"Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;fill:#123047}.h1{font-size:35px;font-weight:700}.sub{font-size:16px;fill:#527083}.label{font-size:16px;font-weight:700}.small{font-size:14px;fill:#436273}.tiny{font-size:13px;fill:#527083}.white{fill:#fff}.code{font-family:Consolas,"Cascadia Mono",monospace;font-size:14px}.card{fill:#fff;stroke:#b9dce2;stroke-width:2}.line{stroke:#0891b2;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <text x="80" y="76" class="h1">Go TCP 多人终端聊天室</text>
+  <text x="80" y="107" class="sub">当前代码架构 · TCP 长连接 · 逐行消息协议 · 进程内广播</text>
+  <rect x="80" y="140" width="1440" height="2" fill="#b9dce2"/>
+
+  <!-- client column -->
+  <text x="100" y="194" class="label">终端客户端（可同时多个）</text>
+  <g filter="url(#shadow)">
+    <rect class="card" x="100" y="220" rx="18" width="360" height="140"/>
+    <rect x="100" y="220" rx="18" width="360" height="42" fill="#e0f2fe"/>
+    <text x="126" y="248" class="label">客户端 A · Go CLI</text>
+    <text x="126" y="291" class="code">net.Dial(&quot;tcp&quot;, &quot;localhost:8080&quot;)</text>
+    <text x="126" y="320" class="small">输入用户名 → 发送首行</text><text x="126" y="344" class="small">goroutine 持续接收服务器消息</text>
+    <rect class="card" x="100" y="405" rx="18" width="360" height="140"/>
+    <rect x="100" y="405" rx="18" width="360" height="42" fill="#e0f2fe"/>
+    <text x="126" y="433" class="label">客户端 B · Go CLI</text>
+    <text x="126" y="476" class="code">net.Dial(&quot;tcp&quot;, &quot;localhost:8080&quot;)</text>
+    <text x="126" y="505" class="small">输入用户名 → 发送首行</text><text x="126" y="529" class="small">goroutine 持续接收服务器消息</text>
+    <rect class="card" x="100" y="590" rx="18" width="360" height="140"/>
+    <rect x="100" y="590" rx="18" width="360" height="42" fill="#e0f2fe"/>
+    <text x="126" y="618" class="label">客户端 C · Go CLI</text>
+    <text x="126" y="661" class="code">net.Dial(&quot;tcp&quot;, &quot;localhost:8080&quot;)</text>
+    <text x="126" y="690" class="small">输入用户名 → 发送首行</text><text x="126" y="714" class="small">goroutine 持续接收服务器消息</text>
+  </g>
+
+  <!-- connections -->
+  <path class="line" d="M460 290 C535 290,530 328,615 328"/><path class="line" d="M615 352 C530 352,535 330,460 330"/>
+  <path class="line" d="M460 475 C535 475,530 470,615 470"/><path class="line" d="M615 494 C530 494,535 515,460 515"/>
+  <path class="line" d="M460 660 C535 660,530 612,615 612"/><path class="line" d="M615 636 C530 636,535 700,460 700"/>
+  <rect x="476" y="384" width="128" height="48" rx="12" fill="#e6fffb" stroke="#99f6e4"/>
+  <text x="493" y="405" class="tiny">TCP 长连接</text><text x="483" y="423" class="tiny">换行符（\n）分帧</text>
+
+  <!-- server -->
+  <g filter="url(#shadow)">
+    <rect x="615" y="190" width="805" height="575" rx="24" fill="#fff" stroke="#0f9aaa" stroke-width="2"/>
+    <path d="M615 214 Q615 190 639 190 H1396 Q1420 190 1420 214 V268 H615Z" fill="url(#server)"/>
+    <text x="648" y="238" class="white" style="font-size:24px;font-weight:700">Go TCP Chat Server  ·  :8080</text>
+    <text x="648" y="259" class="white" style="font-size:13px">单进程 · 所有在线用户状态保存在内存</text>
+    <rect x="648" y="298" width="330" height="106" rx="14" fill="#f0fdfa" stroke="#99f6e4"/>
+    <text x="674" y="329" class="label">1 · 监听与接入</text>
+    <text x="674" y="357" class="code">net.Listen(&quot;tcp&quot;, &quot;:8080&quot;)</text>
+    <text x="674" y="382" class="small">Accept 循环：每个连接启动 goroutine</text>
+    <path d="M813 404 L813 436" stroke="#14b8a6" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="648" y="442" width="330" height="150" rx="14" fill="#f0fdfa" stroke="#99f6e4"/>
+    <text x="674" y="473" class="label">2 · handleConnection(conn)</text>
+    <text x="674" y="502" class="code">bufio.NewReader(conn)</text>
+    <text x="674" y="529" class="small">首行：readUser → 用户名</text>
+    <text x="674" y="554" class="small">后续：ReadString('\n') → 消息</text>
+    <text x="674" y="577" class="small">连接关闭时移除用户并关闭 conn</text>
+    <path d="M978 516 L1030 516" stroke="#14b8a6" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="1035" y="298" width="350" height="294" rx="14" fill="#f0fdfa" stroke="#99f6e4"/>
+    <text x="1061" y="329" class="label">3 · UserManager</text>
+    <text x="1061" y="361" class="code">users []*user + sync.RWMutex</text>
+    <line x1="1061" y1="382" x2="1358" y2="382" stroke="#c9eee8"/>
+    <text x="1061" y="414" class="small">addUser / removeUser：写锁</text>
+    <text x="1061" y="443" class="small">broadcast：读锁下复制用户列表</text>
+    <text x="1061" y="482" class="label">广播规则</text>
+    <text x="1061" y="510" class="small">向除发送者外的每个在线客户端写入：</text>
+    <text x="1061" y="539" class="code">sender.name + &quot;: &quot; + message + &quot;\n&quot;</text>
+    <rect x="1035" y="625" width="350" height="105" rx="14" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="1061" y="657" class="label">当前边界</text>
+    <text x="1061" y="684" class="small">无数据库 · 无鉴权 · 无消息持久化</text>
+    <text x="1061" y="709" class="small">客户端固定连接 localhost:8080</text>
+  </g>
+  <text x="100" y="822" class="sub">消息流：客户端发送「用户名\n」完成注册；随后发送「消息\n」→ 服务端解析 → 广播给其他在线用户。</text>
+  <text x="100" y="855" class="tiny">基于 cmd/client/main.go 与 cmd/server/main.go 推断 · 2026-09-14</text>
+</svg>
