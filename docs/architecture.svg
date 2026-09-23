@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="980" viewBox="0 0 1240 980" font-family="Segoe UI, Microsoft YaHei, sans-serif">
+  <style>
+    /* SVG collapses whitespace runs by default; 'pre' preserves the ASCII-tree column alignment. */
+    text { white-space: pre; }
+  </style>
+  <defs>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2980b9"/>
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#e74c3c"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="980" fill="#ffffff"/>
+
+  <!-- ============ 标题 ============ -->
+  <text x="620" y="46" text-anchor="middle" font-size="27" font-weight="700" fill="#1a252f">tcp-chat 项目架构图</text>
+  <text x="620" y="74" text-anchor="middle" font-size="13.5" fill="#7f8c8d">Go 1.26.5 · 零第三方依赖 · 基于裸 TCP 的文本行协议（现状快照，含缺口标注）</text>
+
+  <!-- ============ 客户端进程 ============ -->
+  <rect x="40" y="110" width="390" height="350" rx="12" fill="#f3f8ff" stroke="#4a90d9" stroke-width="2"/>
+  <text x="235" y="141" text-anchor="middle" font-size="16" font-weight="700" fill="#1f5c99">客户端进程　client.exe</text>
+  <line x1="52" y1="154" x2="418" y2="154" stroke="#4a90d9" stroke-width="1" opacity="0.35"/>
+
+  <rect x="58" y="168" width="354" height="122" rx="9" fill="#ffffff" stroke="#4a90d9" stroke-width="1.5"/>
+  <text x="72" y="190" font-size="12.5" font-weight="700" fill="#4a90d9">main goroutine</text>
+  <g font-family="Consolas, monospace" font-size="11.5" fill="#34495e">
+    <text x="72" y="212">conn, err := net.Dial("tcp", "localhost:8080")</text>
+    <text x="72" y="232">defer conn.Close()</text>
+    <text x="72" y="252">fmt.Scanln(&amp;username) → conn.Write(username+"\n")</text>
+    <text x="72" y="272">for { fmt.Scanln(&amp;msg); conn.Write(msg+"\n") }</text>
+  </g>
+
+  <rect x="58" y="302" width="354" height="140" rx="9" fill="#fdecea" stroke="#e74c3c" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="72" y="324" font-size="12.5" font-weight="700" fill="#c0392b">✘ 缺失：接收 goroutine</text>
+  <g font-size="11.5" fill="#a93226">
+    <text x="72" y="346">全文件没有任何 conn.Read</text>
+    <text x="72" y="366">→ 服务端下发的数据永远不会被读取</text>
+    <text x="72" y="386">→ 补上后需与 main 争用 stdout，要加写锁</text>
+    <text x="72" y="406">→ 否则输入提示符会被对方消息插断</text>
+  </g>
+
+  <!-- ============ 服务端进程 ============ -->
+  <rect x="810" y="110" width="390" height="350" rx="12" fill="#f2fbf4" stroke="#4caf50" stroke-width="2"/>
+  <text x="1005" y="141" text-anchor="middle" font-size="16" font-weight="700" fill="#2e7d32">服务端进程　server.exe</text>
+  <line x1="822" y1="154" x2="1188" y2="154" stroke="#4caf50" stroke-width="1" opacity="0.35"/>
+
+  <rect x="828" y="168" width="354" height="122" rx="9" fill="#ffffff" stroke="#4caf50" stroke-width="1.5"/>
+  <text x="842" y="190" font-size="12.5" font-weight="700" fill="#2e7d32">main goroutine — Accept 循环</text>
+  <g font-family="Consolas, monospace" font-size="11.5" fill="#34495e">
+    <text x="842" y="212">net.Listen("tcp", ":8080")　← 监听所有网卡</text>
+    <text x="842" y="232">for { conn, err := listener.Accept() }</text>
+    <text x="842" y="252">go handleConnection(conn)　← 每连接一 goroutine</text>
+    <text x="842" y="272">defer listener.Close()　← 在循环之后，永不执行</text>
+  </g>
+
+  <rect x="828" y="302" width="354" height="140" rx="9" fill="#ffffff" stroke="#4caf50" stroke-width="1.5"/>
+  <text x="842" y="324" font-size="12.5" font-weight="700" fill="#2e7d32">goroutine × N — handleConnection</text>
+  <g font-family="Consolas, monospace" font-size="11.5" fill="#34495e">
+    <text x="842" y="346">reader := bufio.NewReader(conn)　★ 只建一次</text>
+    <text x="842" y="366">readUser() → 第 1 行 = 用户名</text>
+    <text x="842" y="386">for { msg, err := reader.ReadString('\n') }</text>
+    <text x="842" y="406">msg = strings.TrimRight(msg, "\r\n")</text>
+    <text x="842" y="426">fmt.Println(user.name+":", msg) ← 只写自身 stdout</text>
+  </g>
+
+  <!-- ============ 两条数据通路 ============ -->
+  <line x1="430" y1="232" x2="802" y2="232" stroke="#2980b9" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <text x="616" y="222" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2980b9">① 明文行协议 · 单向写入</text>
+  <text x="616" y="254" text-anchor="middle" font-family="Consolas, monospace" font-size="11" fill="#7f8c8d">username\n　msg\n　msg\n</text>
+
+  <line x1="802" y1="340" x2="438" y2="340" stroke="#e74c3c" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arrowRed)"/>
+  <text x="616" y="330" text-anchor="middle" font-size="12.5" font-weight="600" fill="#c0392b">② ✘ 服务端不广播，客户端不接收</text>
+  <text x="616" y="362" text-anchor="middle" font-size="11" fill="#c0392b">消息只留在服务端控制台 → 客户端之间完全隔离</text>
+
+  <!-- ============ 协议 ============ -->
+  <rect x="40" y="490" width="1160" height="152" rx="12" fill="#fffcf0" stroke="#e0a800" stroke-width="2"/>
+  <text x="62" y="520" font-size="16" font-weight="700" fill="#a67c00">自定义行协议（Line Protocol）</text>
+
+  <rect x="62" y="534" width="132" height="42" rx="7" fill="#ffffff" stroke="#e0a800" stroke-width="1.5"/>
+  <text x="128" y="561" text-anchor="middle" font-family="Consolas, monospace" font-size="13" fill="#6b5300">alice\n</text>
+  <text x="128" y="592" text-anchor="middle" font-size="10.5" fill="#a67c00">第 1 行 = 用户名</text>
+
+  <rect x="208" y="534" width="132" height="42" rx="7" fill="#ffffff" stroke="#e0a800" stroke-width="1.5"/>
+  <text x="274" y="561" text-anchor="middle" font-family="Consolas, monospace" font-size="13" fill="#6b5300">hello world\n</text>
+  <text x="274" y="592" text-anchor="middle" font-size="10.5" fill="#a67c00">第 2 行 = 消息</text>
+
+  <rect x="354" y="534" width="132" height="42" rx="7" fill="#ffffff" stroke="#e0a800" stroke-width="1.5"/>
+  <text x="420" y="561" text-anchor="middle" font-family="Consolas, monospace" font-size="13" fill="#6b5300">bye\n</text>
+  <text x="420" y="592" text-anchor="middle" font-size="10.5" fill="#a67c00">第 3 行 = 消息</text>
+
+  <g font-size="11.5" fill="#6b5300">
+    <text x="520" y="548">• 服务端读第 1 行做 strings.TrimSpace → 用户名</text>
+    <text x="520" y="570">• 其余每行 TrimRight(msg, "\r\n")：只剥分隔符，保留消息内部空格（比 TrimSpace 更正确）</text>
+    <text x="520" y="592">• ✘ 无长度前缀、无转义 → 消息内不能含换行；ReadString 无上限，可被超长无换行输入撑爆内存</text>
+    <text x="520" y="614">• ✘ 无类型字段 → 无法区分「聊天消息 / 系统通知 / 上下线事件」</text>
+  </g>
+
+  <!-- ============ 文件与构建 ============ -->
+  <rect x="40" y="670" width="560" height="290" rx="12" fill="#f7f9fb" stroke="#8898aa" stroke-width="1.8"/>
+  <text x="62" y="700" font-size="15" font-weight="700" fill="#3d4d5c">文件与构建状态</text>
+  <g font-family="Consolas, monospace" font-size="11.5" fill="#3d4d5c">
+    <text x="62" y="728">tcp-chat/</text>
+    <text x="62" y="750">├─ go.mod                     module tcp-chat · go 1.26.5</text>
+    <text x="62" y="772">├─ cmd/server/main.go         70 行  → server.exe</text>
+    <text x="62" y="794">├─ cmd/client/main.go         42 行  → client.exe</text>
+    <text x="62" y="816">├─ internal/server/server.go   0 行  ✘ 空文件</text>
+    <text x="62" y="838">└─ .gitignore                 *.exe *.out *.test</text>
+  </g>
+  <g font-family="Consolas, monospace" font-size="11.5">
+    <text x="62" y="874" fill="#2e7d32">✔ go build ./cmd/server   → exit 0</text>
+    <text x="62" y="896" fill="#2e7d32">✔ go build ./cmd/client   → exit 0</text>
+    <text x="62" y="918" fill="#c0392b">✘ go build ./...          → server.go:1:1: expected 'package', found 'EOF'</text>
+  </g>
+
+  <!-- ============ 质量小结 ============ -->
+  <rect x="620" y="670" width="580" height="290" rx="12" fill="#f7f9fb" stroke="#8898aa" stroke-width="1.8"/>
+  <text x="642" y="700" font-size="15" font-weight="700" fill="#3d4d5c">代码质量小结</text>
+
+  <text x="642" y="732" font-size="12.5" font-weight="700" fill="#2e7d32">✔ 已经做对的</text>
+  <g font-size="11.5" fill="#3d4d5c">
+    <text x="656" y="754">· bufio.Reader 只建一次 —— 避开预读缓冲吞掉后续消息的经典坑</text>
+    <text x="656" y="774">· TrimRight 只剥分隔符，保留消息内部空格</text>
+    <text x="656" y="794">· 一连接一 goroutine，defer conn.Close() 资源释放正确</text>
+  </g>
+
+  <text x="642" y="828" font-size="12.5" font-weight="700" fill="#c0392b">✘ 关键缺口（按优先级）</text>
+  <g font-size="11.5" fill="#3d4d5c">
+    <text x="656" y="850">1. 服务端无注册表、无广播 —— 现在不是聊天室，只是日志收集器</text>
+    <text x="656" y="870">2. 客户端无接收 goroutine —— 收不到任何下行数据</text>
+    <text x="656" y="890">3. internal/server/server.go 是空文件 —— 一次未完成的重构</text>
+    <text x="656" y="910">4. 无连接写锁、无超时、无输入长度上限、无 TLS</text>
+  </g>
+</svg>

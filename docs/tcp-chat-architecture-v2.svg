@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1080" viewBox="0 0 1800 1080" role="img" aria-labelledby="title description">
+  <title id="title">Go TCP 终端聊天室架构图（功能完成版）</title>
+  <desc id="description">多个菜单式 Go 终端客户端通过 TCP 长连接接入聊天室服务端。服务端支持广播、在线用户查询、私聊、改名和上下线通知。</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f8fbff"/><stop offset="1" stop-color="#ecfdf9"/></linearGradient>
+    <linearGradient id="header" x1="0" x2="1"><stop stop-color="#075985"/><stop offset="1" stop-color="#0f766e"/></linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#164e63" flood-opacity=".13"/></filter>
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="4" orient="auto"><path d="M0 0 L0 8 L10 4 z" fill="#0284c7"/></marker>
+    <style>
+      text{font-family:"Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;fill:#17374b}.title{font-size:38px;font-weight:700}.subtitle{font-size:17px;fill:#537084}.section{font-size:18px;font-weight:700}.card-title{font-size:17px;font-weight:700}.body{font-size:14px;fill:#3f6072}.tiny{font-size:12px;fill:#557586}.mono{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;fill:#174866}.card{fill:#fff;stroke:#b9dce5;stroke-width:2}.node{fill:#f0fdfa;stroke:#99e6d8;stroke-width:1.5}.flow{fill:none;stroke:#0284c7;stroke-width:3;marker-end:url(#arrow)}.white{fill:#fff}.tag{font-size:12px;font-weight:700;fill:#075985}
+    </style>
+  </defs>
+  <rect width="1800" height="1080" fill="url(#background)"/>
+  <text x="85" y="75" class="title">Go TCP 多人终端聊天室 · 当前架构</text>
+  <text x="85" y="108" class="subtitle">菜单式客户端 · 并发 TCP 连接 · 群聊 / 私聊 / 在线用户查询 · 内存态用户管理</text>
+  <rect x="85" y="138" width="1630" height="2" fill="#c4dfe6"/>
+
+  <!-- clients -->
+  <text x="85" y="190" class="section">1 · 多个 Go 终端客户端</text>
+  <g filter="url(#shadow)">
+    <rect class="card" x="85" y="215" width="420" height="220" rx="20"/>
+    <rect x="85" y="215" width="420" height="47" rx="20" fill="#e0f2fe"/>
+    <text x="113" y="246" class="card-title">客户端 A / B / C · 独立进程</text>
+    <text x="113" y="292" class="mono">net.Dial("tcp", "localhost:8080")</text>
+    <text x="113" y="322" class="body">首次发送用户名 + \n，建立用户身份</text>
+    <text x="113" y="351" class="body">发送 goroutine：菜单、公共消息、私聊与 who</text>
+    <text x="113" y="380" class="body">接收 goroutine：持续 ReadString('\n') 并打印</text>
+    <text x="113" y="410" class="tiny">whoDone / toDone 缓冲 channel：协调菜单与服务端响应</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect class="card" x="85" y="475" width="420" height="230" rx="20"/>
+    <rect x="85" y="475" width="420" height="47" rx="20" fill="#e0f2fe"/>
+    <text x="113" y="506" class="card-title">终端菜单与客户端协议</text>
+    <rect x="113" y="537" width="170" height="32" rx="8" fill="#e6fffb"/><text x="128" y="558" class="tag">1 · who（在线列表）</text>
+    <rect x="300" y="537" width="170" height="32" rx="8" fill="#e6fffb"/><text x="315" y="558" class="tag">2 · to|用户|内容</text>
+    <rect x="113" y="582" width="170" height="32" rx="8" fill="#e6fffb"/><text x="128" y="603" class="tag">3 · 公共消息文本</text>
+    <rect x="300" y="582" width="170" height="32" rx="8" fill="#fff7ed"/><text x="315" y="603" class="tag">0 · 客户端退出</text>
+    <text x="113" y="655" class="tiny">服务端断开时，接收协程向等待中的同步 channel 补发信号，避免菜单永久阻塞。</text>
+    <text x="113" y="679" class="tiny">所有业务消息都以换行符 \n 作为 TCP 流的帧边界。</text>
+  </g>
+
+  <!-- transport -->
+  <path class="flow" d="M505 305 C590 305,565 290,665 290"/>
+  <path class="flow" d="M665 325 C570 325,590 360,505 360"/>
+  <rect x="527" y="392" width="122" height="48" rx="12" fill="#e0f7fa" stroke="#8edee7"/>
+  <text x="545" y="413" class="tiny">TCP 长连接</text><text x="537" y="431" class="tiny">双向字节流</text>
+
+  <!-- server -->
+  <g filter="url(#shadow)">
+    <rect x="665" y="180" width="1050" height="650" rx="25" fill="#fff" stroke="#0f91a1" stroke-width="2"/>
+    <path d="M665 205 Q665 180 690 180 H1690 Q1715 180 1715 205 V260 H665Z" fill="url(#header)"/>
+    <text x="700" y="229" class="white" style="font-size:24px;font-weight:700">Go TCP Chat Server · :8080</text>
+    <text x="700" y="250" class="white" style="font-size:13px">net.Listen → Accept 循环 → 每个 TCP 连接一个 handleConnection goroutine</text>
+
+    <rect class="node" x="700" y="294" width="315" height="184" rx="16"/>
+    <text x="728" y="327" class="card-title">连接会话处理</text>
+    <text x="728" y="358" class="mono">bufio.NewReader(conn)</text>
+    <text x="728" y="387" class="body">首行 readUser：读取并保存用户名</text>
+    <text x="728" y="414" class="body">循环 ReadString('\n')：解析命令或消息</text>
+    <text x="728" y="450" class="tiny">defer：广播“下线了” → 移除用户 → Close</text>
+
+    <rect class="node" x="1050" y="294" width="300" height="184" rx="16"/>
+    <text x="1078" y="327" class="card-title">UserManager（共享内存）</text>
+    <text x="1078" y="359" class="mono">users []*user + sync.RWMutex</text>
+    <text x="1078" y="388" class="body">addUser / removeUser：写锁</text>
+    <text x="1078" y="416" class="body">查询与广播：读锁后复制用户列表</text>
+    <text x="1078" y="450" class="tiny">user：id、name、conn（id 当前未使用）</text>
+
+    <rect class="node" x="1385" y="294" width="295" height="184" rx="16"/>
+    <text x="1413" y="327" class="card-title">消息投递</text>
+    <text x="1413" y="358" class="mono">sendMessageToUser(u, msg)</text>
+    <text x="1413" y="387" class="body">向指定连接写入服务端响应</text>
+    <text x="1413" y="417" class="mono">broadcast(sender, msg)</text>
+    <text x="1413" y="448" class="body">向除发送者外的所有在线用户写入</text>
+    <path d="M1015 386 L1042 386" class="flow"/><path d="M1350 386 L1377 386" class="flow"/>
+
+    <text x="700" y="527" class="section">2 · 服务器消息路由</text>
+    <rect x="700" y="550" width="225" height="190" rx="14" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="722" y="582" class="card-title">公共聊天</text>
+    <text x="722" y="611" class="mono">其他任意文本</text>
+    <text x="722" y="641" class="body">broadcast(sender, msg)</text>
+    <text x="722" y="677" class="tiny">上线 / 下线同样通过广播</text>
+    <text x="722" y="702" class="tiny">格式：用户名: 内容\n</text>
+
+    <rect x="945" y="550" width="225" height="190" rx="14" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="967" y="582" class="card-title">在线用户查询</text>
+    <text x="967" y="611" class="mono">who</text>
+    <text x="967" y="641" class="body">回送用户编号与用户名</text>
+    <text x="967" y="677" class="tiny">WHO_BEDGIN\n（代码当前拼写）</text>
+    <text x="967" y="702" class="tiny">…用户列表… → WHO_END\n</text>
+
+    <rect x="1190" y="550" width="235" height="190" rx="14" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="1212" y="582" class="card-title">私聊</text>
+    <text x="1212" y="611" class="mono">to|目标用户|内容</text>
+    <text x="1212" y="641" class="body">查找目标 → 定向投递</text>
+    <text x="1212" y="677" class="tiny">发送者收到成功 / 失败回执</text>
+    <text x="1212" y="702" class="tiny">最后必回 TO_END\n</text>
+
+    <rect x="1445" y="550" width="235" height="190" rx="14" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="1467" y="582" class="card-title">服务端已支持命令</text>
+    <text x="1467" y="611" class="mono">rename|新用户名</text>
+    <text x="1467" y="641" class="body">在写锁下更新当前用户名称</text>
+    <text x="1467" y="678" class="tiny">当前客户端菜单未暴露此入口</text>
+    <text x="1467" y="703" class="tiny">无数据库 / 鉴权 / 消息持久化</text>
+  </g>
+
+  <rect x="85" y="880" width="1630" height="110" rx="18" fill="#fff" stroke="#c5e4df"/>
+  <text x="115" y="917" class="section">完整交互摘要</text>
+  <text x="115" y="950" class="body">连接：用户名\n → 加入 UserManager → 通知其他用户“上线了” ｜  退出：读错误 → 通知其他用户“下线了” → 移除用户</text>
+  <text x="115" y="977" class="body">消息：公共文本 → 广播 ｜ who → 列表响应 + WHO_END ｜ to|用户|内容 → 目标消息 + 发送者回执 + TO_END</text>
+  <text x="85" y="1030" class="tiny">依据 cmd/client/main.go 与 cmd/server/main.go 绘制 · 当前代码状态 · 2026-09-16</text>
+</svg>
