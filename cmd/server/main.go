@@ -156,7 +156,6 @@ func handleConnection(conn net.Conn, userManager *userManager) {
 
 		// 客户端每条消息末尾带换行；只去除协议分隔符。
 		msg = strings.TrimRight(msg, "\r\n")
-		fmt.Println(currentUser.name+":", msg)
 
 		if msg == "who" {
 			userManager.sendMessageToUser(currentUser, "WHO_BEDGIN\n")
