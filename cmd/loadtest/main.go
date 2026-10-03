@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,9 +20,107 @@ const errorSampleLimit = 10
 var errorSamples atomic.Int32
 
 func reportError(stage string, err error) {
+	//if初始化加条件判断的简便写法
 	if n := errorSamples.Add(1); n <= errorSampleLimit {
 		fmt.Printf("error sample %d/%d [%s]: %v\n", n, errorSampleLimit, stage, err)
 	}
+}
+
+// updateMax 用 CAS 循环把 dst 抬到 v：多个 goroutine 同时更新时不会互相覆盖。
+// 这是一个无锁的并发最大值更新，能在多个goroutine同时写入的时候保持最大值
+func updateMax(dst *atomic.Int64, v int64) {
+	for {
+		old := dst.Load()
+		if v <= old || dst.CompareAndSwap(old, v) {
+			return
+		}
+	}
+}
+
+// 延迟直方图：0~10ms每格100us，10~100ms每格1ms，100ms~1s每格10ms，
+// 1s以上统一放最后一格。格子越细越占内存，后面变粗是为了5000个连接也扛得住
+const (
+	histBuckets        = 281
+	histOverflowBucket = 280
+
+	//每收到这么多条数据消息就抽1条量延迟，别让压测程序自己把CPU吃光
+	latencySampleEvery = 10
+)
+
+// 每个客户端一份延迟直方图，写入的只有自己那个读取goroutine，不用加锁
+type latencyHist [histBuckets]uint64
+
+// 把一个耗时塞进对应的格子
+func histIndex(ns int64) int {
+	switch {
+	case ns < 10*int64(time.Millisecond):
+		return int(ns / int64(100*time.Microsecond)) //0~10ms，每格100us
+	case ns < 100*int64(time.Millisecond):
+		return 100 + int(ns/int64(time.Millisecond)) - 10 //10~100ms，每格1ms
+	case ns < int64(time.Second):
+		return 190 + int(ns/int64(10*time.Millisecond)) - 10 //100ms~1s，每格10ms
+	default:
+		return histOverflowBucket //1s以上都进最后一格
+	}
+}
+
+// 取格子对应的耗时，报百分位用，取格子的中点
+func histMid(idx int) time.Duration {
+	switch {
+	case idx < 100:
+		return time.Duration(idx)*100*time.Microsecond + 50*time.Microsecond
+	case idx < 190:
+		return time.Duration(10+idx-100)*time.Millisecond + 500*time.Microsecond
+	case idx < histOverflowBucket:
+		return time.Duration(100+(idx-190)*10)*time.Millisecond + 5*time.Millisecond
+	default:
+		return time.Second
+	}
+}
+
+// 从直方图里取第p分位（p 用 0.5、0.95 这种），返回近似值
+func percentileOf(hist []uint64, total uint64, p float64) (time.Duration, bool) {
+	if total == 0 {
+		return 0, false
+	}
+	rank := uint64(float64(total)*p) + 1 //要取的是第几名
+	if rank > total {
+		rank = total
+	}
+	var cum uint64
+	for i := 0; i < histBuckets; i++ {
+		cum += hist[i]
+		if cum >= rank {
+			return histMid(i), true
+		}
+	}
+	return time.Second, true
+}
+
+// 从收到的一行里找 ",t=" 后面的发送时间戳。系统行（比如"xx: 上线了"）没有这个，返回0
+func parseSendTime(line string) int64 {
+	i := strings.LastIndex(line, ",t=")
+	if i < 0 {
+		return 0
+	}
+	rest := line[i+3:]
+	j := strings.IndexByte(rest, ']')
+	if j < 0 {
+		return 0
+	}
+	ns, err := strconv.ParseInt(rest[:j], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return ns
+}
+
+// 把延迟打印成ms保留一位小数，没样本就打 n/a
+func fmtLatency(d time.Duration, ok bool) string {
+	if !ok {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f ms", float64(d)/float64(time.Millisecond))
 }
 
 func main() {
@@ -49,17 +149,27 @@ func main() {
 	var sent atomic.Int64         // 成功发出的消息数
 	var sendFailed atomic.Int64   // 发送失败次数（非超时类）
 	var writeTimeout atomic.Int64 // 发送超时次数（写超时被掐断）
+	var recvFailed atomic.Int64   // 接收失败次数（不是自己主动关的、读断了）
+	var latencyMax atomic.Int64   // 延迟样本里的最大值（纳秒）
 
-	// start 给所有 goroutine 一个统一的起跑时刻：close 之后才开始按 -ramp 的
-	// 时刻表拨号（-ramp=0 时就是全部同一瞬间）。
+	//每个客户端一份接收计数和延迟直方图，各写各的互不打扰，最后统一汇总
+	receivedPer := make([]int64, *users)
+	hists := make([]latencyHist, *users)
+
+	//收尾时等所有读取goroutine都退干净了再汇总，不然会和它们抢着写这些数据
+	var readersWG sync.WaitGroup
+
+	// start 给所有 goroutine 一个统一的起跑时刻：close 之后才开始按 -ramp 的时刻表拨号（-ramp=0 时就是全部同一瞬间）。
 	start := make(chan struct{})
 
 	// 基准时间：第 i 个用户的拨号时刻 = begin + i*ramp/users。
 	begin := time.Now()
 
+	//wg是waitGroup等待组，能通过add和wait和done()操作，使得每个用户goroutine都好后一起进行ramp连接
 	var wg sync.WaitGroup
 	wg.Add(*users)
 
+	//这里
 	for i := 0; i < *users; i++ {
 		id := i
 		go func() {
@@ -73,15 +183,21 @@ func main() {
 					time.Sleep(delay)
 				}
 			}
-
+			//重要：开始拨号,超时报拨号超时错误
 			conn, err := net.DialTimeout("tcp", *addr, 5*time.Second)
 			if err != nil {
 				dialFailed.Add(1)
 				reportError("dial", err)
 				return
 			}
-			defer conn.Close()
+			//关连接前先把closing标记立起来，读取goroutine靠它区分"自己收工"和"真读坏了"
+			var closing atomic.Bool
+			defer func() {
+				closing.Store(true)
+				conn.Close()
+			}()
 
+			//处理发送用户名报错
 			if _, err := fmt.Fprintf(conn, "load-user-%05d\n", id); err != nil {
 				nameFailed.Add(1)
 				reportError("username", err)
@@ -92,18 +208,40 @@ func main() {
 			alive.Add(1)
 			defer alive.Add(-1) // 任何退出路径都会把 alive 减回去
 
-			// 必须持续读取服务端广播，否则服务端可能因 socket 缓冲堆积而阻塞。
-			done := make(chan struct{})
+			// 必须持续读取服务端广播，否则服务端可能因socket缓冲堆积而阻塞。
+			// 这里顺便把数据消息数下来、抽一部分量端到端延迟；系统行（末尾不是]）直接跳过。
+			// readersWG 保证收尾时这些读取goroutine都退干净了，再汇总它们的数据。
+			readersWG.Add(1)
 			go func() {
-				defer close(done)
+				defer readersWG.Done()
 				reader := bufio.NewReader(conn)
 				for {
-					if _, err := reader.ReadString('\n'); err != nil {
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						//不是我们主动关的才算接收失败
+						if !closing.Load() {
+							recvFailed.Add(1)
+						}
 						return
+					}
+					//数据消息的行尾是 "[user=...,sequence=...,t=...]"，系统行不是，用这个区分
+					if len(line) < 2 || line[len(line)-2] != ']' {
+						continue
+					}
+					receivedPer[id]++
+					//每 latencySampleEvery 条抽1条量延迟，样本够用还省CPU
+					if receivedPer[id]%latencySampleEvery == 0 {
+						if sendAt := parseSendTime(line); sendAt > 0 {
+							if d := hdNow() - sendAt; d >= 0 {
+								hists[id][histIndex(d)]++
+								//比一比，把更大的延迟更新进latencyMax
+								updateMax(&latencyMax, d)
+							}
+						}
 					}
 				}
 			}()
-
+			//设置stop计时器，时间是hold的数值
 			stop := time.NewTimer(*hold)
 			defer stop.Stop()
 
@@ -113,9 +251,10 @@ func main() {
 				return
 			}
 
+			//设置ticker触发器，每messageEvery出发一次
 			ticker := time.NewTicker(*messageEvery)
 			defer ticker.Stop()
-
+			//sequence是触发器的触发频率
 			var sequence int64
 			for {
 				select {
@@ -127,17 +266,20 @@ func main() {
 					// 给单次发送设置超时，避免服务器卡住时压测用户永久阻塞
 					_ = conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 
+					//把发送时间也塞进消息里，收到的人用它算这条消息走了多久
+					sendAt := hdNow()
 					_, err := fmt.Fprintf(
 						conn,
-						"%s [user=%05d,sequence=%d]\n",
+						"%s [user=%05d,sequence=%d,t=%d]\n",
 						*message,
 						id,
 						sequence,
+						sendAt,
 					)
 
 					// 清除超时设置，避免影响后续操作
 					_ = conn.SetWriteDeadline(time.Time{})
-
+					//这是上面Fprintf的错误处理
 					if err != nil {
 						if errors.Is(err, os.ErrDeadlineExceeded) {
 							writeTimeout.Add(1)
@@ -154,12 +296,14 @@ func main() {
 		}()
 	}
 
+	//此时这么多个goroutine已经创建好了可以继续下一步了
 	close(start)
 
 	// 运行中打进度行；结束前停掉，免得和最终汇总交叉输出。
 	stopReport := make(chan struct{})
 	if *reportEvery > 0 {
 		go func() {
+			//汇报频率触发器
 			ticker := time.NewTicker(*reportEvery)
 			defer ticker.Stop()
 			for {
@@ -169,7 +313,7 @@ func main() {
 				case <-ticker.C:
 					fmt.Printf(
 						"[%s] alive=%d, connected=%d, dial_failed=%d, sent=%d, send_failed=%d, write_timeout=%d\n",
-						time.Since(begin).Round(time.Second),
+						time.Since(begin).Round(time.Second), //四舍五入到整数秒
 						alive.Load(),
 						connected.Load(),
 						dialFailed.Load(),
@@ -183,17 +327,78 @@ func main() {
 	}
 
 	wg.Wait()
+	//等待wg为0后关闭进度汇报
 	close(stopReport)
+	//等所有读取goroutine也退干净，再汇总它们攒的数据
+	readersWG.Wait()
+	elapsed := time.Since(begin)
 
-	fmt.Printf(
-		"finished in %s, users=%d, connected=%d, dial_failed=%d, name_failed=%d, sent=%d, send_failed=%d, write_timeout=%d\n",
-		time.Since(begin).Round(time.Millisecond),
-		*users,
-		connected.Load(),
-		dialFailed.Load(),
-		nameFailed.Load(),
-		sent.Load(),
-		sendFailed.Load(),
-		writeTimeout.Load(),
-	)
+	var merged [histBuckets]uint64
+	var receivedTotal int64
+	var latencySamples uint64
+	for i := 0; i < *users; i++ {
+		receivedTotal += receivedPer[i]
+		for b := 0; b < histBuckets; b++ {
+			merged[b] += hists[i][b]
+		}
+	}
+	for b := range merged {
+		latencySamples += merged[b]
+	}
+
+	//下面按固定格式打报表
+	fmt.Println("========== TCP Chat Load Test Result ==========")
+	fmt.Println()
+
+	fmt.Println("Connections")
+	fmt.Printf("  %-15s%d\n", "Target:", *users)
+	success := connected.Load()
+	failed := dialFailed.Load() + nameFailed.Load()
+	fmt.Printf("  %-15s%d\n", "Success:", success)
+	fmt.Printf("  %-15s%d\n", "Failed:", failed)
+	successRate := 0.0
+	if *users > 0 {
+		successRate = float64(success) / float64(*users) * 100
+	}
+	fmt.Printf("  %-15s%.2f%%\n", "Success Rate:", successRate)
+	fmt.Println()
+
+	//Received是"所有客户端收到的份数"：服务端广播是给其他每个人各发一份，
+	//所以正常时它约等于 Sent×（当时在线人数-1），跟预期差得多就是服务端漏发了
+	sentTotal := sent.Load()
+	fmt.Println("Messages")
+	fmt.Printf("  %-15s%d\n", "Sent:", sentTotal)
+	fmt.Printf("  %-15s%d\n", "Received:", receivedTotal)
+	mps := 0.0
+	if elapsed > 0 {
+		mps = float64(sentTotal) / elapsed.Seconds()
+	}
+	fmt.Printf("  %-15s%.0f msg/s\n", "Throughput:", mps)
+	fmt.Println()
+
+	//延迟是"消息里的t= 到本地收到"这段时长，每 latencySampleEvery 条抽1条，报的是抽样分布
+	fmt.Println("Latency")
+	p50, ok50 := percentileOf(merged[:], latencySamples, 0.50)
+	p95, ok95 := percentileOf(merged[:], latencySamples, 0.95)
+	p99, ok99 := percentileOf(merged[:], latencySamples, 0.99)
+	fmt.Printf("  %-15s%s\n", "P50:", fmtLatency(p50, ok50))
+	fmt.Printf("  %-15s%s\n", "P95:", fmtLatency(p95, ok95))
+	fmt.Printf("  %-15s%s\n", "P99:", fmtLatency(p99, ok99))
+	fmt.Printf("  %-15s%s\n", "Max:", fmtLatency(time.Duration(latencyMax.Load()), latencySamples > 0))
+	fmt.Println()
+
+	//发送失败是写失败+写超时加一起，接收失败是"不是自己主动关的、读断了"
+	sendFailTotal := sendFailed.Load() + writeTimeout.Load()
+	recvFail := recvFailed.Load()
+	fmt.Println("Errors")
+	fmt.Printf("  %-15s%d\n", "Send Failed:", sendFailTotal)
+	fmt.Printf("  %-15s%d\n", "Receive Failed:", recvFail)
+	errRate := 0.0
+	if sentTotal > 0 {
+		errRate = float64(sendFailTotal+recvFail) / float64(sentTotal) * 100
+	}
+	fmt.Printf("  %-15s%.3f%%\n", "Error Rate:", errRate)
+	fmt.Println()
+
+	fmt.Println(strings.Repeat("=", 47))
 }
