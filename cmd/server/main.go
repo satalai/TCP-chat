@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"net"
 	"strings"
@@ -9,6 +10,10 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 )
+
+//verbose 控制每个连接的日志（接入、断开、读写失败）
+//默认关：几千个连接压测的时候这些日志会把控制台刷爆，每条Println都是实打实的I/O
+var verbose bool
 
 type user struct {
 	conn net.Conn
@@ -42,7 +47,7 @@ func (um *userManager) sendMessageToUser(u *user, message string) {
 	um.RLock()
 	defer um.RUnlock()
 	_, err := u.conn.Write([]byte(message))
-	if err != nil {
+	if err != nil && verbose {
 		fmt.Println("发送消息失败:", err)
 	}
 }
@@ -59,7 +64,7 @@ func (um *userManager) broadcast(sender *user, message string) {
 	for _, u := range users {
 		if u != sender {
 			_, err := u.conn.Write([]byte(sender.name + ": " + message + "\n"))
-			if err != nil {
+			if err != nil && verbose {
 				fmt.Println("发送消息失败:", err)
 			}
 		}
@@ -113,7 +118,10 @@ func (um *userManager) handlePrivateMessage(sender *user, msg string) {
 func readUser(conn net.Conn, reader *bufio.Reader) *user {
 	name, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Println("读取用户名失败:", err)
+		//连上都还没报名就断了（比如探测连接），默认不打
+		if verbose {
+			fmt.Println("读取用户名失败:", err)
+		}
 		return nil
 	}
 
@@ -142,7 +150,9 @@ func handleConnection(conn net.Conn, userManager *userManager) {
 
 	userManager.addUser(currentUser)
 
-	fmt.Println("处理客户端请求:", conn.RemoteAddr().String())
+	if verbose {
+		fmt.Println("处理客户端请求:", conn.RemoteAddr().String())
+	}
 
 	//广播发送上线消息
 	userManager.broadcast(currentUser, "上线了")
@@ -150,7 +160,10 @@ func handleConnection(conn net.Conn, userManager *userManager) {
 	for {
 		msg, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("读取消息失败:", err)
+			//EOF是对方正常关了连接，压测收尾时一大片，默认不打
+			if verbose {
+				fmt.Println("读取消息失败:", err)
+			}
 			return
 		}
 
@@ -189,6 +202,10 @@ func handleConnection(conn net.Conn, userManager *userManager) {
 }
 
 func main() {
+	//可选日志开关：想看每个连接的进出细节就加 -verbose
+	flag.BoolVar(&verbose, "verbose", false, "print per-connection logs;off by default")
+	flag.Parse()
+
 	//启用pprof
 	go func(){
 		addr := "127.0.0.1:6060"
