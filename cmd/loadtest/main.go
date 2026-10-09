@@ -134,10 +134,17 @@ func main() {
 	hold := flag.Duration("hold", 60*time.Second, "connection hold duration")
 	ramp := flag.Duration("ramp", 10*time.Second, "spread the dials evenly over this duration;0 dials all at once")
 	reportEvery := flag.Duration("report-every", 5*time.Second, "print a progress line every interval;0 disables")
+	//每多少人一组：2就相当于私聊，等于users就是一个大群，0=不分组（都待在大厅）
+	group := flag.Int("group", 0, "how many users per group;2=private chat,0=no grouping")
 	//发送消息的频率
 	messageEvery := flag.Duration("message-every", 0, "interval between public message per user;0 disables sending")
 	message := flag.String("message", "hello", "public message body")
 	flag.Parse()
+
+	if *group < 0 || *group == 1 {
+		fmt.Println("group 要么是 0（不分组），要么 >=2（2 就是私聊）")
+		return
+	}
 
 	//连接相关的计数
 	var connected atomic.Int64 //累计连上过的连接数
@@ -200,6 +207,14 @@ func main() {
 				nameFailed.Add(1)
 				reportError("username", err)
 				return
+			}
+			//分了组就再报一次：按连接顺序每group个人一组，组名g-0、g-1...
+			if *group > 0 {
+				if _, err := fmt.Fprintf(conn, "join|g-%d\n", id / *group); err != nil {
+					nameFailed.Add(1)
+					reportError("join", err)
+					return
+				}
 			}
 
 			connected.Add(1)

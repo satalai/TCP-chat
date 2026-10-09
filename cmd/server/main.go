@@ -5,19 +5,20 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"strings"
-	"sync"
 	"net/http"
 	_ "net/http/pprof"
+	"strings"
+	"sync"
 )
 
-//verbose 控制每个连接的日志（接入、断开、读写失败）
-//默认关：几千个连接压测的时候这些日志会把控制台刷爆，每条Println都是实打实的I/O
+// verbose 控制每个连接的日志（接入、断开、读写失败）
+// 默认关：几千个连接压测的时候这些日志会把控制台刷爆，每条Println都是实打实的I/O
 var verbose bool
 
 type user struct {
-	conn net.Conn
-	name string
+	conn  net.Conn
+	name  string
+	group string //所在组，空串=大厅（没进过组的用户互相可见）
 }
 
 type userManager struct {
@@ -52,21 +53,25 @@ func (um *userManager) sendMessageToUser(u *user, message string) {
 	}
 }
 
-// 广播函数
+// 广播函数：只发给和发送者同组的人（组名空串=大厅，大厅的人互相可见）
 func (um *userManager) broadcast(sender *user, message string) {
 	um.RLock()
-
-	users := make([]*user, len(um.users))
-	copy(users, um.users)
-
+	senderGroup := sender.group //发送者的组名先抄一份，免得和并发的join抢着改
+	senderName := sender.name   //发送者的名字也抄一份，免得和并发的rename抢着改
+	//同组人的连接抄成快照，循环里不再碰会变的字段
+	//创建conn切片，0是当前容量，len(um.users)保证了最大数量也不会超过所有在线用户数量
+	targets := make([]net.Conn, 0, len(um.users))
+	for _, u := range um.users {
+		if u != sender && u.group == senderGroup {
+			targets = append(targets, u.conn)
+		}
+	}
 	um.RUnlock()
 
-	for _, u := range users {
-		if u != sender {
-			_, err := u.conn.Write([]byte(sender.name + ": " + message + "\n"))
-			if err != nil && verbose {
-				fmt.Println("发送消息失败:", err)
-			}
+	for _, conn := range targets {
+		_, err := conn.Write([]byte(senderName + ": " + message + "\n"))
+		if err != nil && verbose {
+			fmt.Println("发送消息失败:", err)
 		}
 	}
 }
@@ -193,6 +198,17 @@ func handleConnection(conn net.Conn, userManager *userManager) {
 				userManager.Unlock()
 			}
 			userManager.sendMessageToUser(currentUser, "用户名已修改为: "+newName+"\n")
+		} else if len(msg) >= 5 && msg[:5] == "join|" {
+			//join|组名 换个组；组名留空就回大厅
+			group := strings.TrimSpace(msg[5:])
+			userManager.Lock()
+			currentUser.group = group
+			userManager.Unlock()
+			if group == "" {
+				userManager.sendMessageToUser(currentUser, "已回到大厅\n")
+			} else {
+				userManager.sendMessageToUser(currentUser, "已加入组: "+group+"\n")
+			}
 		} else if len(msg) >= 3 && msg[:3] == "to|" {
 			userManager.handlePrivateMessage(currentUser, msg)
 		} else {
@@ -207,13 +223,13 @@ func main() {
 	flag.Parse()
 
 	//启用pprof
-	go func(){
+	go func() {
 		addr := "127.0.0.1:6060"
 		fmt.Println("pprof listening at http://" + addr + "/debug/pprof/")
-		err := http.ListenAndServe(addr, nil);
+		err := http.ListenAndServe(addr, nil)
 		if err != nil {
-        fmt.Println("pprof server stopped:", err)
-    	}
+			fmt.Println("pprof server stopped:", err)
+		}
 	}()
 	//创建listener监听本地8080端口的tcp连接
 	listener, err := net.Listen("tcp", ":8080")
@@ -224,6 +240,9 @@ func main() {
 	defer listener.Close()
 
 	var userManager userManager
+
+	//启用metrics采样和HTTP接口
+	startMetrics(&userManager)
 
 	fmt.Println("Server 已启动，监听 :8080")
 	for {
