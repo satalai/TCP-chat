@@ -68,8 +68,10 @@ func (um *userManager) broadcast(sender *user, message string) {
 	}
 	um.RUnlock()
 
+	line := []byte(senderName + ": " + message + "\n")
+
 	for _, conn := range targets {
-		_, err := conn.Write([]byte(senderName + ": " + message + "\n"))
+		_, err := conn.Write(line)
 		if err != nil && verbose {
 			fmt.Println("发送消息失败:", err)
 		}
@@ -116,7 +118,8 @@ func (um *userManager) handlePrivateMessage(sender *user, msg string) {
 	}
 
 	// 先发给对方，再回执给发送者
-	um.sendMessageToUser(remoteUser, sender.name+": "+content+"\n")
+	line := []byte(sender.name + ": " + content + "\n")
+	um.sendMessageToUser(remoteUser, string(line))
 	um.sendMessageToUser(sender, "已发送给 "+remoteUser.name+": "+content+"\n")
 }
 
