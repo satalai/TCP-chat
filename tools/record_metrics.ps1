@@ -3,6 +3,10 @@
 param([string]$Out = "metrics.csv")
 
 $header = "time,online,goroutines,threads,proc_cpu,sys_cpu,rss_mb,heap_alloc_mb,heap_inuse_mb,heap_sys_mb,stack_inuse_mb,num_gc,mallocs_per_sec,alloc_mb_per_sec,gc_per_sec,gc_pause_ms"
+if (Test-Path $Out) {
+    Write-Host "ERROR: $Out already exists. Use a new file name." -ForegroundColor Red
+    exit 1
+}
 Set-Content -Path $Out -Value $header -Encoding UTF8
 
 Write-Host "recording to $Out, Ctrl+C to stop"
