@@ -5,8 +5,10 @@ go 1.26.5
 require github.com/shirou/gopsutil/v4 v4.26.9
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/go-sql-driver/mysql v1.10.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
