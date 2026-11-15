@@ -17,3 +17,21 @@ build/
 
 # 环境变量
 .env
+
+# 本地压测工具和采样脚本
+/cmd/loadtest/
+/tools/
+
+# 压测结果和性能分析数据
+/results/
+/metrics.csv
+*.pprof
+*.prof
+
+# 本地架构图
+/docs/*.svg
+
+# 性能测试报告和截图
+/picture/*.html
+/picture/*.pdf
+/picture/*.png
